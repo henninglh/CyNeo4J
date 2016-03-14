@@ -7,7 +7,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
 
 import nl.maastrichtuniversity.networklibrary.cyneo4j.internal.Plugin;
 import nl.maastrichtuniversity.networklibrary.cyneo4j.internal.extensionlogic.Extension;
@@ -22,8 +21,10 @@ import nl.maastrichtuniversity.networklibrary.cyneo4j.internal.serviceprovider.g
 import nl.maastrichtuniversity.networklibrary.cyneo4j.internal.serviceprovider.sync.SyncDownTaskFactory;
 import nl.maastrichtuniversity.networklibrary.cyneo4j.internal.serviceprovider.sync.SyncUpTaskFactory;
 
+import org.apache.http.HttpHost;
 import org.apache.http.client.ClientProtocolException;
 import org.apache.http.client.fluent.Async;
+import org.apache.http.client.fluent.Executor;
 import org.apache.http.client.fluent.Request;
 import org.apache.http.entity.ContentType;
 import org.cytoscape.application.swing.AbstractCyAction;
@@ -35,32 +36,42 @@ public class Neo4jRESTServer implements Neo4jServer {
 	private static final String DATA_URL = "/db/data/";
 	private static final String CYPHER_URL = DATA_URL + "cypher";
 	private static final String EXT_URL = DATA_URL + "ext/";
+	private static final int PORT = 7474;
 
 	protected String instanceLocation = null;
+	protected String username = null;
+	protected String password = null;
 
 	private Plugin plugin;
 	private Map<String,AbstractCyAction> localExtensions;
-	
+	private Executor executor = null;
+
 	protected ExecutorService threadpool;
 	protected Async async;
 
 	public Neo4jRESTServer(Plugin plugin){
 		this.plugin = plugin;
-	
+
 	}
 
 	@Override
-	public boolean connect(String instanceLocation) {
-		
-		if(isConnected()){
+	public boolean connect(String instanceLocation, String username, String password) {
+		boolean connectionSuccess;
+
+		if(executor != null){
 			disconnect();
 		}
-		
-		if(validateConnection(instanceLocation)){
-			setInstanceLocation(instanceLocation);
+
+		executor = initializeExecutor(instanceLocation, username, password);
+		connectionSuccess = validateConnection();
+
+		if(connectionSuccess){
 			registerExtension();
+		} else {
+			disconnect(); // cleanup
 		}
-		return isConnected();
+
+		return connectionSuccess;
 	}
 
 	protected void registerExtension() {
@@ -71,19 +82,25 @@ public class Neo4jRESTServer implements Neo4jServer {
 
 	@Override
 	public void disconnect() {
+		executor.clearAuth();
+		executor.clearCookies();
 		instanceLocation = null;
+		executor = null;
 		unregisterExtensions();
-
 	}
 
 	private void unregisterExtensions() {
 		getPlugin().unregisterActions();
-
 	}
 
 	@Override
 	public boolean isConnected() {
-		return validateConnection(getInstanceLocation());
+		return validateConnection();
+	}
+
+	@Override
+	public Executor getExecutor() {
+		return executor;
 	}
 
 	@Override
@@ -91,17 +108,35 @@ public class Neo4jRESTServer implements Neo4jServer {
 		return instanceLocation;
 	}
 
+	@Override
+	public String getUsername() {
+		return username;
+	}
+
+    @Override
+	public String getPassword() {
+		return password;
+	}
+
 	protected void setInstanceLocation(String instanceLocation) {
 		this.instanceLocation = instanceLocation;
+	}
+
+	protected void setInstanceUsername(String username) {
+		this.username = username;
+	}
+
+	protected void setInstancePassword(String password) {
+		this.password = password;
 	}
 
 	@Override
 	public void syncDown(boolean mergeInCurrent) {
 
-		TaskIterator it = new SyncDownTaskFactory(getPlugin().getCyNetworkManager(), 
-				mergeInCurrent, 
-				getPlugin().getCyNetworkFactory(), 
-				getInstanceLocation(), 
+		TaskIterator it = new SyncDownTaskFactory(this, getPlugin().getCyNetworkManager(),
+				mergeInCurrent,
+				getPlugin().getCyNetworkFactory(),
+				getInstanceLocation(),
 				getCypherURL(),
 				getPlugin().getCyNetViewMgr(),
 				getPlugin().getCyNetworkViewFactory(),
@@ -110,7 +145,6 @@ public class Neo4jRESTServer implements Neo4jServer {
 				).createTaskIterator();
 
 		plugin.getDialogTaskManager().execute(it);
-
 	}
 
 	@Override
@@ -132,10 +166,10 @@ public class Neo4jRESTServer implements Neo4jServer {
 			res.add(cypherExt);
 		}
 		try {
-			Set<String> extNames = Request.Get(getInstanceLocation() + EXT_URL).execute().handleResponse(new ExtensionLocationsHandler());
+			Set<String> extNames = executor.execute(Request.Get(getInstanceLocation() + EXT_URL)).handleResponse(new ExtensionLocationsHandler());
 
 			for(String extName : extNames){
-				List<Extension> serverSupportedExt = Request.Get(getInstanceLocation() + EXT_URL + extName).execute().handleResponse(new ExtensionParametersResponseHandler(getInstanceLocation() + EXT_URL + extName)); 
+				List<Extension> serverSupportedExt = executor.execute(Request.Get(getInstanceLocation() + EXT_URL + extName)).handleResponse(new ExtensionParametersResponseHandler(getInstanceLocation() + EXT_URL + extName));
 
 				for(Extension ext : serverSupportedExt){
 					if(localExtensions.containsKey(ext.getName())){
@@ -150,13 +184,12 @@ public class Neo4jRESTServer implements Neo4jServer {
 			e.printStackTrace();
 		}
 
-
 		return res;
 	}
 
 	@Override
 	public void syncUp(boolean wipeRemote, CyNetwork curr) {
-		TaskIterator it = new SyncUpTaskFactory(wipeRemote,getCypherURL(),getPlugin().getCyApplicationManager().getCurrentNetwork()).createTaskIterator();
+		TaskIterator it = new SyncUpTaskFactory(this, wipeRemote,getCypherURL(),getPlugin().getCyApplicationManager().getCurrentNetwork()).createTaskIterator();
 		plugin.getDialogTaskManager().execute(it);
 
 	}
@@ -164,7 +197,7 @@ public class Neo4jRESTServer implements Neo4jServer {
 	private String getCypherURL() {
 		return getInstanceLocation() + CYPHER_URL;
 	}
-	
+
 	protected void setupAsync(){
 		threadpool = Executors.newFixedThreadPool(2);
 		async = Async.newInstance().use(threadpool);
@@ -173,19 +206,19 @@ public class Neo4jRESTServer implements Neo4jServer {
 	@Override
 	public Object executeExtensionCall(ExtensionCall call, boolean doAsync) {
 		Object retVal = null;
-		
+
 		if(doAsync){
 			setupAsync();
-			
+
 //			System.out.println("executing call: " + call.getUrlFragment());
 //			System.out.println("using payload: " + call.getPayload());
 			String url = call.getUrlFragment();
 			Request req = Request.Post(url).bodyString(call.getPayload(), ContentType.APPLICATION_JSON);
-			
+
 			async.execute(req);
 		} else {
 
-			
+
 			try {
 //				System.out.println("executing call: " + call.getUrlFragment());
 //				System.out.println("using payload: " + call.getPayload());
@@ -203,13 +236,14 @@ public class Neo4jRESTServer implements Neo4jServer {
 	}
 
 	@Override
-	public boolean validateConnection(String instanceLocation) {
+	public boolean validateConnection() {
 		try {
-			return instanceLocation != null && Request.Get(instanceLocation).execute().handleResponse(new Neo4jPingHandler());
+			return instanceLocation != null && executor.execute(Request.Get(instanceLocation)).handleResponse(new Neo4jPingHandler());
 		} catch (ClientProtocolException e) {
+			System.err.println("ClientProtocolException in Neo4jRESTServer.validateConnection()");
 		} catch (IOException e) {
+			System.err.println("IOException in Neo4jRESTServer.validateConnection()");
 		}
-		// show exceptions? does the user understand the error messages? 
 		return false;
 	}
 
@@ -233,7 +267,29 @@ public class Neo4jRESTServer implements Neo4jServer {
 	@Override
 	public void setLocalSupportedExtension(Map<String,AbstractCyAction> localExtensions) {
 		this.localExtensions = localExtensions;
-
 	}
 
+	/* Is not needed with Executor?
+	private String encode(String user, String pass) {
+		String toEncode = user + ":" + pass;
+		return Base64.encodeBase64String(toEncode.getBytes());
+	}
+	*/
+
+	private Executor initializeExecutor(String instanceLocation, String username, String password) {
+		Executor newExecutor;
+
+		setInstanceLocation(instanceLocation);
+
+        if (!username.equals("") && !password.equals("")) {
+            newExecutor = Executor.newInstance().auth(new HttpHost(getInstanceLocation(), PORT), getUsername(), getPassword())
+                            					.authPreemptive(new HttpHost(getInstanceLocation(), PORT));
+			setInstanceUsername(username);
+			setInstancePassword(password);
+        } else {
+			newExecutor = Executor.newInstance();
+        }
+
+		return newExecutor;
+	}
 }

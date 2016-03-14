@@ -60,11 +60,11 @@ public class ShortestPathExtExec implements ExtensionExecutor {
 		String payload = "{\"target\":\""+instanceLocation+"node/"+CyUtils.getNeoID(getNet(), to)+"\",\"depth\":"+getDepth()+"}";
 		
 		List<ExtensionCall> calls = new ArrayList<ExtensionCall>();
-		calls.add(new Neo4jCall(urlFragment, payload));
+		calls.add(new Neo4jCall(urlFragment, payload, false));
 		
 		urlFragment = "ShortestPath/node/" +CyUtils.getNeoID(getNet(), to)+ "/shortestPath";
 		payload = "{\"target\":\""+instanceLocation+"node/"+CyUtils.getNeoID(getNet(), from)+"\",\"depth\":"+getDepth()+"}";
-		calls.add(new Neo4jCall(urlFragment, payload));
+		calls.add(new Neo4jCall(urlFragment, payload, false));
 		
 		return calls;
 	}

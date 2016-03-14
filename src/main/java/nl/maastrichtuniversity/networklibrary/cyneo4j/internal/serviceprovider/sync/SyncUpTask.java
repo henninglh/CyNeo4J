@@ -4,6 +4,7 @@ import java.io.IOException;
 
 import javax.swing.JOptionPane;
 
+import nl.maastrichtuniversity.networklibrary.cyneo4j.internal.serviceprovider.Neo4jRESTServer;
 import nl.maastrichtuniversity.networklibrary.cyneo4j.internal.serviceprovider.general.ReturnCodeResponseHandler;
 import nl.maastrichtuniversity.networklibrary.cyneo4j.internal.utils.CyUtils;
 
@@ -22,11 +23,13 @@ public class SyncUpTask extends AbstractTask {
 	private boolean wipeRemote;
 	private String cypherURL;
 	private CyNetwork currNet;
+	private Neo4jRESTServer server;
 
-	public SyncUpTask(boolean wipeRemote,String cypherURL,CyNetwork currNet){
+	public SyncUpTask(Neo4jRESTServer server, boolean wipeRemote, String cypherURL, CyNetwork currNet){
 		this.wipeRemote = wipeRemote;
 		this.cypherURL = cypherURL;
 		this.currNet = currNet;
+		this.server = server;
 	}
 
 	@Override
@@ -53,7 +56,7 @@ public class SyncUpTask extends AbstractTask {
 
 //				System.out.println(wipeQuery);
 
-				wiped = Request.Post(getCypherURL()).bodyString(wipeQuery, ContentType.APPLICATION_JSON).execute().handleResponse(new ReturnCodeResponseHandler());
+				wiped = server.getExecutor().execute(Request.Post(getCypherURL()).bodyString(wipeQuery, ContentType.APPLICATION_JSON)).handleResponse(new ReturnCodeResponseHandler());
 			}
 
 			if(wiped == wipeRemote){
@@ -70,7 +73,7 @@ public class SyncUpTask extends AbstractTask {
 					String params = CyUtils.convertCyAttributesToJson(node, defNodeTab);
 					String cypher = "{ \"query\" : \"CREATE (n { props }) return id(n)\", \"params\" : {   \"props\" : [ "+ params +" ] } }";
 
-					Long neoid = Request.Post(getCypherURL()).bodyString(cypher, ContentType.APPLICATION_JSON).execute().handleResponse(new CreateIdReturnResponseHandler());
+					Long neoid = server.getExecutor().execute(Request.Post(getCypherURL()).bodyString(cypher, ContentType.APPLICATION_JSON)).handleResponse(new CreateIdReturnResponseHandler());
 					defNodeTab.getRow(node.getSUID()).set("neoid", neoid);
 
 					progress = progress + stepSize;
@@ -93,7 +96,7 @@ public class SyncUpTask extends AbstractTask {
 
 					String cypher = "{\"query\" : \"MATCH (from { SUID: {fname}}),(to { SUID: {tname}}) CREATE (from)-[r:"+rtype+" { rprops } ]->(to) return id(r)\", \"params\" : { \"fname\" : "+from+", \"tname\" : "+to+", \"rprops\" : "+ rparams +" }}";
 					
-					Long neoid = Request.Post(getCypherURL()).bodyString(cypher, ContentType.APPLICATION_JSON).execute().handleResponse(new CreateIdReturnResponseHandler());
+					Long neoid = server.getExecutor().execute(Request.Post(getCypherURL()).bodyString(cypher, ContentType.APPLICATION_JSON)).handleResponse(new CreateIdReturnResponseHandler());
 					defEdgeTab.getRow(edge.getSUID()).set("neoid", neoid);
 
 					progress = progress + stepSize;
