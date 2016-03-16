@@ -1,5 +1,6 @@
 package nl.maastrichtuniversity.networklibrary.cyneo4j.internal.serviceprovider;
 
+import com.sun.istack.internal.NotNull;
 import nl.maastrichtuniversity.networklibrary.cyneo4j.internal.Plugin;
 import nl.maastrichtuniversity.networklibrary.cyneo4j.internal.extensionlogic.Extension;
 import nl.maastrichtuniversity.networklibrary.cyneo4j.internal.extensionlogic.ExtensionCall;
@@ -57,8 +58,10 @@ public class Neo4jRESTServer implements Neo4jServer {
 			disconnect();
 		}
 
+		setInstanceLocation(instanceLocation);
 		connectionSuccess = validConnection();
 		auth64EncodedInfo = createAuth64EncodedInfo(username, password);
+		System.out.println(auth64EncodedInfo);
 
 		if(connectionSuccess){
 			registerExtension();
@@ -100,9 +103,11 @@ public class Neo4jRESTServer implements Neo4jServer {
 		this.instanceLocation = instanceLocation;
 	}
 
-	protected String createAuth64EncodedInfo(String username, String password) {
-		String toEncode = username + ":" + password;
-		return Base64.encodeBase64String(toEncode.getBytes());
+	protected String createAuth64EncodedInfo(@NotNull String username, @NotNull String password) {
+		if (!username.equals("") && !password.equals("")) {
+			return Base64.encodeBase64String((username + ":" + password).getBytes());
+		}
+		return null;
 	}
 
 	@Override
