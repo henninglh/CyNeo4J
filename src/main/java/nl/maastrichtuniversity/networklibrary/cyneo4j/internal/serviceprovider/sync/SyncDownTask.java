@@ -1,15 +1,9 @@
 package nl.maastrichtuniversity.networklibrary.cyneo4j.internal.serviceprovider.sync;
 
-import java.io.IOException;
-import java.util.Collection;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
-
 import nl.maastrichtuniversity.networklibrary.cyneo4j.internal.extensionlogic.impl.CypherResultParser;
+import nl.maastrichtuniversity.networklibrary.cyneo4j.internal.serviceprovider.Neo4jRESTServer;
 import nl.maastrichtuniversity.networklibrary.cyneo4j.internal.serviceprovider.extension.PassThroughResponseHandler;
 import nl.maastrichtuniversity.networklibrary.cyneo4j.internal.utils.CyUtils;
-
 import org.apache.http.client.ClientProtocolException;
 import org.apache.http.client.fluent.Request;
 import org.apache.http.entity.ContentType;
@@ -27,6 +21,12 @@ import org.cytoscape.view.vizmap.VisualMappingManager;
 import org.cytoscape.work.AbstractTask;
 import org.cytoscape.work.TaskMonitor;
 
+import java.io.IOException;
+import java.util.Collection;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+
 public class SyncDownTask extends AbstractTask{
 
 	private boolean mergeInCurrent;
@@ -38,16 +38,17 @@ public class SyncDownTask extends AbstractTask{
 	private CyNetworkViewFactory cyNetworkViewFactory;
 	private CyLayoutAlgorithmManager cyLayoutAlgorithmMgr;
 	private VisualMappingManager visualMappingMgr;
+	private Neo4jRESTServer server;
 
 	int chunkSize = 500;
-	
-	public SyncDownTask(boolean mergeInCurrent, String cypherURL,
-			String instanceLocation, CyNetworkFactory cyNetworkFactory,
-			CyNetworkManager cyNetworkMgr,
-			CyNetworkViewManager cyNetworkViewMgr,
-			CyNetworkViewFactory cyNetworkViewFactory,
-			CyLayoutAlgorithmManager cyLayoutAlgorithmMgr,
-			VisualMappingManager visualMappingMgr) {
+
+	public SyncDownTask(Neo4jRESTServer server, boolean mergeInCurrent, String cypherURL,
+						String instanceLocation, CyNetworkFactory cyNetworkFactory,
+						CyNetworkManager cyNetworkMgr,
+						CyNetworkViewManager cyNetworkViewMgr,
+						CyNetworkViewFactory cyNetworkViewFactory,
+						CyLayoutAlgorithmManager cyLayoutAlgorithmMgr,
+						VisualMappingManager visualMappingMgr) {
 		super();
 		this.mergeInCurrent = mergeInCurrent;
 		this.cypherURL = cypherURL;
@@ -58,6 +59,7 @@ public class SyncDownTask extends AbstractTask{
 		this.cyNetworkViewFactory = cyNetworkViewFactory;
 		this.cyLayoutAlgorithmMgr = cyLayoutAlgorithmMgr;
 		this.visualMappingMgr = visualMappingMgr;
+		this.server = server;
 	}
 
 	@Override
@@ -71,20 +73,28 @@ public class SyncDownTask extends AbstractTask{
 				String edgeIdQuery = "{ \"query\" : \"MATCH ()-[r]->() RETURN id(r)\",\"params\" : {}}";
 
 				IdListHandler idListHandler = new IdListHandler();
-				List<Long> nodeIds = Request.Post(cypherURL).bodyString(nodeIdQuery, ContentType.APPLICATION_JSON).execute().handleResponse(idListHandler);
-				List<Long> edgeIds = Request.Post(cypherURL).bodyString(edgeIdQuery, ContentType.APPLICATION_JSON).execute().handleResponse(idListHandler);
-				
+				List<Long> nodeIds = Request.Post(cypherURL)
+						.addHeader("Authorization", server.getBasic64AuthInfo())
+						.bodyString(nodeIdQuery, ContentType.APPLICATION_JSON)
+                        .execute()
+						.handleResponse(idListHandler);
+				List<Long> edgeIds = Request.Post(cypherURL)
+						.addHeader("Authorization", server.getBasic64AuthInfo())
+						.bodyString(edgeIdQuery, ContentType.APPLICATION_JSON)
+						.execute()
+						.handleResponse(idListHandler);
+
 				int numQueries = nodeIds.size() + edgeIds.size();
-				
-				double progress_increment = (0.7 / (double)numQueries) * (double)chunkSize;				
+
+				double progress_increment = (0.7 / (double)numQueries) * (double)chunkSize;
 				double progress = 0.1;
 
 				taskMonitor.setProgress(progress);
-				
+
 				if(nodeIds.size() > 0){
 
 					taskMonitor.setTitle("Synchronizing the remote network DOWN");
-					
+
 					// setup network
 					CyNetwork network = cyNetworkFactory.createNetwork();
 					network.getRow(network).set(CyNetwork.NAME,instanceLocation);
@@ -101,19 +111,22 @@ public class SyncDownTask extends AbstractTask{
 							end = nodeIds.size();
 						String array = toJSONArray(nodeIds.subList(start, end));
 						String query = "{\"query\" : \"MATCH (n) where id(n) in {toget} RETURN n\", \"params\" : { \"toget\" : " + array + "} }";
-						
-						Object responseObj = Request.Post(cypherURL).bodyString(query, ContentType.APPLICATION_JSON).execute().handleResponse(passHandler);
-						
+
+						Object responseObj = Request.Post(cypherURL)
+								.addHeader("Authorization", server.getBasic64AuthInfo())
+								.bodyString(query, ContentType.APPLICATION_JSON)
+								.execute().handleResponse(passHandler);
+
 						if(responseObj == null){
 							throw new IllegalArgumentException("query failed! " + query);
 						}
-						
+
 						cypherParser.parseRetVal(responseObj);
-						
+
 						progress+=progress_increment;
 						taskMonitor.setProgress(progress);
 					}
-					
+
 					cyNetworkMgr.addNetwork(network);
 
 					cypherParser = new CypherResultParser(network);
@@ -124,24 +137,27 @@ public class SyncDownTask extends AbstractTask{
 
 						if(end > edgeIds.size())
 							end = edgeIds.size();
-						
+
 						String array = toJSONArray(edgeIds.subList(start, end));
 						String query = "{\"query\" : \"MATCH ()-[r]->() where id(r) in {toget} RETURN r\", \"params\" : { \"toget\" : " + array + "} }";
-						
-						Object responseObj = Request.Post(cypherURL).bodyString(query, ContentType.APPLICATION_JSON).execute().handleResponse(passHandler);
+
+						Object responseObj = Request.Post(cypherURL)
+								.addHeader("Authorization", server.getBasic64AuthInfo())
+								.bodyString(query, ContentType.APPLICATION_JSON)
+                                .execute().handleResponse(passHandler);
 						cypherParser.parseRetVal(responseObj);
-						
+
 						if(responseObj == null){
 							throw new IllegalArgumentException("query failed! " + query);
 						}
-						
+
 						progress+=progress_increment;
 						taskMonitor.setProgress(progress);
 					}
-		
+
 					taskMonitor.setStatusMessage("Creating View");
 					taskMonitor.setProgress(0.8);
-					
+
 					Collection<CyNetworkView> views = cyNetworkViewMgr.getNetworkViews(network);
 					CyNetworkView view;
 					if(!views.isEmpty()) {
@@ -153,7 +169,7 @@ public class SyncDownTask extends AbstractTask{
 
 					taskMonitor.setStatusMessage("Applying Layout");
 					taskMonitor.setProgress(0.9);
-					
+
 					Set<View<CyNode>> nodes = new HashSet<View<CyNode>>();
 					CyLayoutAlgorithm layout = cyLayoutAlgorithmMgr.getLayout("force-directed");
 					insertTasksAfterCurrentTask(layout.createTaskIterator(view, layout.createLayoutContext(), nodes, null));

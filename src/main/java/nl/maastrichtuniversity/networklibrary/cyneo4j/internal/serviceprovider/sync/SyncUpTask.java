@@ -1,12 +1,8 @@
 package nl.maastrichtuniversity.networklibrary.cyneo4j.internal.serviceprovider.sync;
 
-import java.io.IOException;
-
-import javax.swing.JOptionPane;
-
+import nl.maastrichtuniversity.networklibrary.cyneo4j.internal.serviceprovider.Neo4jRESTServer;
 import nl.maastrichtuniversity.networklibrary.cyneo4j.internal.serviceprovider.general.ReturnCodeResponseHandler;
 import nl.maastrichtuniversity.networklibrary.cyneo4j.internal.utils.CyUtils;
-
 import org.apache.http.client.ClientProtocolException;
 import org.apache.http.client.fluent.Request;
 import org.apache.http.entity.ContentType;
@@ -17,16 +13,21 @@ import org.cytoscape.model.CyTable;
 import org.cytoscape.work.AbstractTask;
 import org.cytoscape.work.TaskMonitor;
 
+import javax.swing.*;
+import java.io.IOException;
+
 public class SyncUpTask extends AbstractTask {
 
 	private boolean wipeRemote;
 	private String cypherURL;
 	private CyNetwork currNet;
+	private Neo4jRESTServer server;
 
-	public SyncUpTask(boolean wipeRemote,String cypherURL,CyNetwork currNet){
+	public SyncUpTask(Neo4jRESTServer server, boolean wipeRemote, String cypherURL, CyNetwork currNet){
 		this.wipeRemote = wipeRemote;
 		this.cypherURL = cypherURL;
 		this.currNet = currNet;
+		this.server = server;
 	}
 
 	@Override
@@ -53,7 +54,10 @@ public class SyncUpTask extends AbstractTask {
 
 //				System.out.println(wipeQuery);
 
-				wiped = Request.Post(getCypherURL()).bodyString(wipeQuery, ContentType.APPLICATION_JSON).execute().handleResponse(new ReturnCodeResponseHandler());
+				wiped = Request.Post(getCypherURL())
+						.addHeader("Authorization", server.getBasic64AuthInfo())
+						.bodyString(wipeQuery, ContentType.APPLICATION_JSON)
+						.execute().handleResponse(new ReturnCodeResponseHandler());
 			}
 
 			if(wiped == wipeRemote){
@@ -70,7 +74,10 @@ public class SyncUpTask extends AbstractTask {
 					String params = CyUtils.convertCyAttributesToJson(node, defNodeTab);
 					String cypher = "{ \"query\" : \"CREATE (n { props }) return id(n)\", \"params\" : {   \"props\" : [ "+ params +" ] } }";
 
-					Long neoid = Request.Post(getCypherURL()).bodyString(cypher, ContentType.APPLICATION_JSON).execute().handleResponse(new CreateIdReturnResponseHandler());
+					Long neoid = Request.Post(getCypherURL())
+							.addHeader("Authorization", server.getBasic64AuthInfo())
+							.bodyString(cypher, ContentType.APPLICATION_JSON)
+							.execute().handleResponse(new CreateIdReturnResponseHandler());
 					defNodeTab.getRow(node.getSUID()).set("neoid", neoid);
 
 					progress = progress + stepSize;
@@ -81,7 +88,7 @@ public class SyncUpTask extends AbstractTask {
 				if(defEdgeTab.getColumn("neoid") == null){
 					defEdgeTab.createColumn("neoid", Long.class, false);
 				}
-				
+
 				for(CyEdge edge : currNet.getEdgeList()){
 					taskMonitor.setStatusMessage("uploading edges");
 					String from = edge.getSource().getSUID().toString();
@@ -92,8 +99,11 @@ public class SyncUpTask extends AbstractTask {
 					String rtype = defEdgeTab.getRow(edge.getSUID()).get(CyEdge.INTERACTION, String.class);
 
 					String cypher = "{\"query\" : \"MATCH (from { SUID: {fname}}),(to { SUID: {tname}}) CREATE (from)-[r:"+rtype+" { rprops } ]->(to) return id(r)\", \"params\" : { \"fname\" : "+from+", \"tname\" : "+to+", \"rprops\" : "+ rparams +" }}";
-					
-					Long neoid = Request.Post(getCypherURL()).bodyString(cypher, ContentType.APPLICATION_JSON).execute().handleResponse(new CreateIdReturnResponseHandler());
+
+					Long neoid = Request.Post(getCypherURL())
+							.addHeader("Authorization", server.getBasic64AuthInfo())
+							.bodyString(cypher, ContentType.APPLICATION_JSON)
+							.execute().handleResponse(new CreateIdReturnResponseHandler());
 					defEdgeTab.getRow(edge.getSUID()).set("neoid", neoid);
 
 					progress = progress + stepSize;
